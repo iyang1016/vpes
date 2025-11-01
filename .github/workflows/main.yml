@@ -19,9 +19,15 @@ jobs:
           path: |
             ~\AppData\Local\Tailscale
             ~\.rdp-session
-          key: rdp-session-${{ github.run_number }}
+            ~\Desktop
+            ~\Documents
+            ~\Downloads
+            ~\AppData\Local\Programs
+            ~\AppData\Roaming
+            C:\ProgramData
+          key: rdp-session-${{ github.repository }}-v2
           restore-keys: |
-            rdp-session-
+            rdp-session-${{ github.repository }}-
       - name: Configure Core RDP Settings
         run: |
           # Enable Remote Desktop and disable Network Level Authentication (if needed)
@@ -48,8 +54,7 @@ jobs:
           $cacheFile = "$env:USERPROFILE\.rdp-session\credentials.txt"
           if (Test-Path $cacheFile) {
               Write-Host "Restoring RDP credentials from cache..."
-              $cachedCreds = Get-Content $cacheFile
-              $password = $cachedCreds
+              $password = (Get-Content $cacheFile -Raw).Trim()
           } else {
               Write-Host "Generating new RDP credentials..."
               Add-Type -AssemblyName System.Security
@@ -138,14 +143,18 @@ jobs:
           Write-Host "Username: RDP"
           Write-Host "Password: $(echo $env:RDP_CREDS)"
           Write-Host "==================`n"
+          Write-Host "NOTE: Files saved to Desktop, Documents, Downloads, and installed apps in AppData will be cached for the next session."
+          Write-Host ""
           
           # Keep runner active until timeout (before 6 hour limit)
-          $endTime = (Get-Date).AddMinutes(340)  # Stop 10 minutes before timeout
+          # Stop 10 minutes before timeout to allow graceful shutdown and cache saving
+          $timeoutMinutes = 350
+          $endTime = (Get-Date).AddMinutes($timeoutMinutes - 10)
           while ((Get-Date) -lt $endTime) {
               Write-Host "[$(Get-Date)] RDP Active - Will auto-restart in next scheduled run"
               Start-Sleep -Seconds 300
           }
-          Write-Host "Approaching timeout - preparing for graceful shutdown..."
+          Write-Host "Approaching timeout - preparing for graceful shutdown and saving session data..."
 
       - name: Save Session Cache
         if: always()
@@ -154,4 +163,10 @@ jobs:
           path: |
             ~\AppData\Local\Tailscale
             ~\.rdp-session
-          key: rdp-session-${{ github.run_number }}
+            ~\Desktop
+            ~\Documents
+            ~\Downloads
+            ~\AppData\Local\Programs
+            ~\AppData\Roaming
+            C:\ProgramData
+          key: rdp-session-${{ github.repository }}-v2
