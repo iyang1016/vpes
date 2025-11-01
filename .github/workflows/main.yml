@@ -2,13 +2,26 @@ name: RH
 
 on:
   workflow_dispatch:
+  schedule:
+    # Run every 6 hours to work around GitHub runner 6-hour session limit
+    - cron: '0 */6 * * *'
 
 jobs:
   secure-rdp:
     runs-on: windows-latest
-    timeout-minutes: 3600
+    timeout-minutes: 350  # Set to ~5h50m to ensure graceful shutdown before 6h limit
 
     steps:
+      - name: Restore Previous Session Cache
+        uses: actions/cache/restore@v3
+        id: cache-restore
+        with:
+          path: |
+            ~\AppData\Local\Tailscale
+            ~\.rdp-session
+          key: rdp-session-${{ github.run_number }}
+          restore-keys: |
+            rdp-session-
       - name: Configure Core RDP Settings
         run: |
           # Enable Remote Desktop and disable Network Level Authentication (if needed)
@@ -31,21 +44,41 @@ jobs:
 
       - name: Create RDP User with Secure Password
         run: |
-          Add-Type -AssemblyName System.Security
-          $charSet = @{
-              Upper   = [char[]](65..90)      # A-Z
-              Lower   = [char[]](97..122)     # a-z
-              Number  = [char[]](48..57)      # 0-9
-              Special = ([char[]](33..47) + [char[]](58..64) +
-                         [char[]](91..96) + [char[]](123..126)) # Special characters
+          # Check if we have cached credentials
+          $cacheFile = "$env:USERPROFILE\.rdp-session\credentials.txt"
+          if (Test-Path $cacheFile) {
+              Write-Host "Restoring RDP credentials from cache..."
+              $cachedCreds = Get-Content $cacheFile
+              $password = $cachedCreds
+          } else {
+              Write-Host "Generating new RDP credentials..."
+              Add-Type -AssemblyName System.Security
+              $charSet = @{
+                  Upper   = [char[]](65..90)      # A-Z
+                  Lower   = [char[]](97..122)     # a-z
+                  Number  = [char[]](48..57)      # 0-9
+                  Special = ([char[]](33..47) + [char[]](58..64) +
+                             [char[]](91..96) + [char[]](123..126)) # Special characters
+              }
+              $rawPassword = @()
+              $rawPassword += $charSet.Upper | Get-Random -Count 4
+              $rawPassword += $charSet.Lower | Get-Random -Count 4
+              $rawPassword += $charSet.Number | Get-Random -Count 4
+              $rawPassword += $charSet.Special | Get-Random -Count 4
+              $password = -join ($rawPassword | Sort-Object { Get-Random })
+              
+              # Cache the password for next run
+              New-Item -Path "$env:USERPROFILE\.rdp-session" -ItemType Directory -Force | Out-Null
+              $password | Out-File -FilePath $cacheFile -Force
           }
-          $rawPassword = @()
-          $rawPassword += $charSet.Upper | Get-Random -Count 4
-          $rawPassword += $charSet.Lower | Get-Random -Count 4
-          $rawPassword += $charSet.Number | Get-Random -Count 4
-          $rawPassword += $charSet.Special | Get-Random -Count 4
-          $password = -join ($rawPassword | Sort-Object { Get-Random })
+          
           $securePass = ConvertTo-SecureString $password -AsPlainText -Force
+          
+          # Remove existing user if present
+          if (Get-LocalUser -Name "RDP" -ErrorAction SilentlyContinue) {
+              Remove-LocalUser -Name "RDP"
+          }
+          
           New-LocalUser -Name "RDP" -Password $securePass -AccountNeverExpires
           Add-LocalGroupMember -Group "Administrators" -Member "RDP"
           Add-LocalGroupMember -Group "Remote Desktop Users" -Member "RDP"
@@ -106,8 +139,19 @@ jobs:
           Write-Host "Password: $(echo $env:RDP_CREDS)"
           Write-Host "==================`n"
           
-          # Keep runner active indefinitely (or until manually cancelled)
-          while ($true) {
-              Write-Host "[$(Get-Date)] RDP Active - Use Ctrl+C in workflow to terminate"
+          # Keep runner active until timeout (before 6 hour limit)
+          $endTime = (Get-Date).AddMinutes(340)  # Stop 10 minutes before timeout
+          while ((Get-Date) -lt $endTime) {
+              Write-Host "[$(Get-Date)] RDP Active - Will auto-restart in next scheduled run"
               Start-Sleep -Seconds 300
           }
+          Write-Host "Approaching timeout - preparing for graceful shutdown..."
+
+      - name: Save Session Cache
+        if: always()
+        uses: actions/cache/save@v3
+        with:
+          path: |
+            ~\AppData\Local\Tailscale
+            ~\.rdp-session
+          key: rdp-session-${{ github.run_number }}
