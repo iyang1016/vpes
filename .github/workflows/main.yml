@@ -3,7 +3,7 @@ name: RH
 on:
   workflow_dispatch:
   schedule:
-    # Run every 6 hours to work around GitHub runner 6-hour session limit
+    # Run every 6 hours to work around GitHub Actions 6-hour maximum job runtime limit
     - cron: '0 */6 * * *'
 
 jobs:
@@ -147,9 +147,10 @@ jobs:
           Write-Host ""
           
           # Keep runner active until timeout (before 6 hour limit)
-          # Stop 10 minutes before timeout to allow graceful shutdown and cache saving
-          $timeoutMinutes = 350
-          $endTime = (Get-Date).AddMinutes($timeoutMinutes - 10)
+          # Stop 10 minutes before the job timeout to allow graceful shutdown and cache saving
+          $jobTimeoutMinutes = 350
+          $shutdownBufferMinutes = 10
+          $endTime = (Get-Date).AddMinutes($jobTimeoutMinutes - $shutdownBufferMinutes)
           while ((Get-Date) -lt $endTime) {
               Write-Host "[$(Get-Date)] RDP Active - Will auto-restart in next scheduled run"
               Start-Sleep -Seconds 300
